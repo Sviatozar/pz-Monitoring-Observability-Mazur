@@ -108,7 +108,7 @@ pz-Monitoring-Observability/
 
 1. Запустити всі сервіси через docker-compose:
    ```
-   docker-compose up -d
+   docker compose up -d
    ```
 
 2. Перевірити:
