@@ -1,0 +1,277 @@
+version: '3.8'
+
+services:
+  # ============================================
+  # Web Frontend (Nginx)
+  # ============================================
+  web:
+    build:
+      context: ./services/web
+      dockerfile: Dockerfile
+    container_name: monitoring-web
+    ports:
+      - "80:80"
+    environment:
+      - WEBAPI_URL=http://webapi:5000
+    depends_on:
+      - webapi
+    networks:
+      - monitoring
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ============================================
+  # Web API (Node.js Express)
+  # ============================================
+  webapi:
+    build:
+      context: ./services/webapi
+      dockerfile: Dockerfile
+    container_name: monitoring-webapi
+    ports:
+      - "5000:5000"
+    environment:
+      - NODE_ENV=production
+      - PORT=5000
+      - MQTT_HOST=emqx
+      - MQTT_PORT=1883
+    depends_on:
+      - emqx
+    networks:
+      - monitoring
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ============================================
+  # MQTT Broker (EMQX)
+  # ============================================
+  emqx:
+    image: emqx/emqx:5.0.0
+    container_name: monitoring-emqx
+    ports:
+      - "1883:1883"    # MQTT
+      - "8883:8883"    # MQTT over TLS
+      - "8081:8081"    # HTTP API
+      - "18083:18083"  # Dashboard
+      - "8083:8083"    
+    environment:
+      - EMQX_NODE_NAME=emqx@emqx
+      - EMQX_CLUSTER_DISCOVERY=static
+      - EMQX_CLUSTER_STATIC_SEEDS=emqx@emqx
+    networks:
+      - monitoring
+    healthcheck:
+      test: ["CMD", "/opt/emqx/bin/emqx", "ctl", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ============================================
+  # Prometheus (Metrics Collection)
+  # ============================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: monitoring-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/alert.rules.yml:/etc/prometheus/alert.rules.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    networks:
+      - monitoring
+    depends_on:
+      - webapi
+      - alertmanager
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ============================================
+  # Grafana (Visualization)
+  # ============================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: monitoring-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./monitoring/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./monitoring/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    networks:
+      - monitoring
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ============================================
+  # Alertmanager (Alert Routing & Notifications)
+  # ============================================
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: monitoring-alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./monitoring/alertmanager/telegram_webhook.sh:/etc/alertmanager/telegram_webhook.sh:ro
+      - alertmanager_data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+    networks:
+      - monitoring
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9093/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+
+# ============================================
+  # Telegram Webhook (Node.js)
+  # ============================================
+  telegram-webhook:
+    build:
+      context: ./monitoring/alertmanager
+      dockerfile: Dockerfile.webhook
+    container_name: monitoring-telegram-webhook
+    #ports:
+    #  - "3000:3000"
+    environment:
+      - TELEGRAM_BOT_TOKEN=8642440451:AAEkxB-j-N6nfnS0OLJzQgRYfpREuW1iTwc
+      - TELEGRAM_CHAT_ID=1305742188
+    networks:
+      - monitoring
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+  # ============================================
+  # cAdvisor (Container Metrics)
+  # ============================================
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: monitoring-cadvisor
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    networks:
+      - monitoring
+    privileged: true
+    devices:
+      - /dev/kmsg
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ============================================
+  # Node Exporter (System Metrics)
+  # ============================================
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: monitoring-node-exporter
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    networks:
+      - monitoring
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  monitoring:
+    driver: bridge
+
+volumes:
+  prometheus_data:
+  grafana_data:
+  alertmanager_data:

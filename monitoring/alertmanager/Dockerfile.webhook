@@ -1,0 +1,6 @@
+FROM node:18-alpine
+WORKDIR /app
+COPY telegram_webhook.js .
+RUN chmod +x telegram_webhook.js
+EXPOSE 3000
+CMD ["node", "telegram_webhook.js"]

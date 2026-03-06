@@ -156,6 +156,370 @@ pz-Monitoring-Observability/
 - Чи зафіксована подія на дашборді?
 - Чи надійшло повідомлення?
 
+---
+
+## 🚀 ПРАКТИЧНА РЕАЛІЗАЦІЯ - Prometheus + Grafana + EMQX + Alertmanager
+
+### Архітектура системи
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Monitoring Stack                         │
+├─────────────────────────────────────────────────────────────┤
+│                                                               │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐       │
+│  │    Nginx     │  │   WebAPI     │  │    EMQX      │       │
+│  │   (Port 80)  │  │  (Port 5000) │  │  (Port 1883) │       │
+│  └──────────────┘  └──────────────┘  └──────────────┘       │
+│         │               │                     │               │
+│         └───────────────┼─────────────────────┘               │
+│                         │ /metrics                            │
+│                         ↓                                     │
+│  ┌──────────────────────────────────────────────────┐        │
+│  │            Prometheus (Port 9090)                │        │
+│  │  ✓ Scrapes metrics from WebAPI                  │        │
+│  │  ✓ Scrapes cAdvisor (containers)                │        │
+│  │  ✓ Scrapes node-exporter (system)               │        │
+│  │  ✓ Evaluates alert rules                        │        │
+│  └──────────────────────────────────────────────────┘        │
+│         │                          │                         │
+│         │ alerts                   │ queries                 │
+│         ↓                          ↓                         │
+│  ┌──────────────────┐    ┌──────────────────┐               │
+│  │  Alertmanager    │    │    Grafana       │               │
+│  │  (Port 9093)     │    │  (Port 3000)     │               │
+│  │                  │    │                  │               │
+│  │ Routing alerts   │    │ Visualizes data  │               │
+│  │ Send to Telegram │    │ Shows dashboards │               │
+│  └──────────────────┘    └──────────────────┘               │
+│         │                                                    │
+│         └──────→ Telegram (notifications)                   │
+│                                                               │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Структура проєкту
+
+```
+pz-Monitoring-Observability/
+│
+├── docker-compose.yaml           # Конфігурація всіх контейнерів
+│
+├── services/
+│   ├── web/
+│   │   ├── Dockerfile            # Nginx контейнер
+│   │   ├── nginx.conf            # Конфігурація Nginx
+│   │   ├── default.conf          # Віртуальний хост
+│   │   └── public/
+│   │       └── index.html        # Статична сторінка
+│   │
+│   ├── webapi/
+│   │   ├── Dockerfile            # Node.js контейнер
+│   │   ├── package.json          # Залежності Node.js
+│   │   ├── server.js             # REST API сервер
+│   │   └── .env                  # Змінні оточення
+│   │
+│   └── mqtt/
+│       ├── Dockerfile            # Mosquitto контейнер
+│       ├── mosquitto.conf        # Конфігурація MQTT брокера
+│       └── acl.txt               # Access Control List
+│
+└── monitoring/
+    ├── prometheus/
+    │   ├── prometheus.yml        # Конфігурація Prometheus
+    │   └── alert.rules.yml       # Правила алертингу
+    │
+    ├── alertmanager/
+    │   ├── alertmanager.yml      # Конфігурація Alertmanager
+    │   └── telegram_webhook.sh   # Скрипт для Telegram
+    │
+    └── grafana/
+        ├── provisioning/
+        │   ├── datasources/
+        │   │   └── prometheus.yml
+        │   └── dashboards/
+        │       └── dashboards.yml
+        └── dashboards/
+            └── monitoring.json   # Дашборд метрик
+```
+
+### Запуск системи
+
+#### Попередні вимоги
+- Docker та Docker Compose (версія 3.8+)
+- Linux/macOS або WSL2 на Windows
+- Мінімум 4 ГБ оперативної пам'яті
+
+#### Кроки запуску
+
+**1. Встановити залежності WebAPI:**
+
+```bash
+cd services/webapi
+npm install
+cd ../..
+```
+
+**2. Запустити контейнери:**
+
+```bash
+docker-compose up -d
+```
+
+**3. Перевірити статус контейнерів:**
+
+```bash
+docker-compose ps
+```
+
+Очікуваний результат:
+```
+NAME                    STATUS
+monitoring-web          Up (healthy)
+monitoring-webapi       Up (healthy)
+monitoring-emqx         Up (healthy)
+monitoring-prometheus   Up (healthy)
+monitoring-grafana      Up (healthy)
+monitoring-alertmanager Up (healthy)
+monitoring-cadvisor     Up
+monitoring-node-exporter Up
+```
+
+#### Доступ до сервісів
+
+| Сервіс | URL | Призначення |
+|--------|-----|-----------|
+| **Web (Nginx)** | http://localhost:80 | Фронтенд з посиланнями |
+| **WebAPI** | http://localhost:5000 | REST API |
+| **Prometheus** | http://localhost:9090 | Збір метрик |
+| **Grafana** | http://localhost:3000 | Дашборди (admin/admin123) |
+| **Alertmanager** | http://localhost:9093 | Управління алертами |
+| **EMQX Dashboard** | http://localhost:18083 | MQTT брокер (admin/public) |
+| **cAdvisor** | http://localhost:8080 | Метрики контейнерів |
+
+### Налаштування Telegram алертингу
+
+Щоб отримувати алерти в Telegram, необхідно:
+
+**1. Створити Telegram бота:**
+- Напишіть [@BotFather](https://t.me/botfather) в Telegram
+- Виконайте команду `/newbot`
+- Отримаєте `TELEGRAM_BOT_TOKEN`
+
+**2. Отримати ID чату:**
+- Напишіть @userinfobot в Telegram
+- Отримаєте `TELEGRAM_CHAT_ID`
+
+**3. Налаштувати Alertmanager:**
+
+Відредагуйте `monitoring/alertmanager/alertmanager.yml`:
+
+```yaml
+global:
+  slack_api_url: ''
+
+route:
+  receiver: 'telegram-notifications'
+  
+receivers:
+  - name: 'telegram-notifications'
+    webhook_configs:
+      - url: 'http://telegram-webhook:3000/alert'
+```
+
+**4. Встановити змінні оточення:**
+
+```bash
+export TELEGRAM_BOT_TOKEN="YOUR_BOT_TOKEN"
+export TELEGRAM_CHAT_ID="YOUR_CHAT_ID"
+```
+
+### Тестування алертингу
+
+**1. Запустити генератор навантаження:**
+
+```bash
+# Генерувати HTTP запити до WebAPI
+curl -s http://localhost:5000/api/data &
+
+# Або в циклі:
+while true; do curl -s http://localhost:5000/api/data > /dev/null; sleep 1; done
+```
+
+**2. Зупинити контейнер для запуску алерту:**
+
+```bash
+docker-compose stop webapi
+```
+
+**3. Перевірити алерти:**
+
+- У Prometheus: http://localhost:9090/alerts
+- У Alertmanager: http://localhost:9093
+- У Grafana: http://localhost:3000/alerting/list
+- У Telegram: отримаєте повідомлення від бота
+
+**4. Запустити контейнер назад:**
+
+```bash
+docker-compose start webapi
+```
+
+### Перегляд метрик у Prometheus
+
+**1. Перейти на http://localhost:9090**
+
+**2. Введення PromQL запитів:**
+
+```promql
+# Статус контейнерів
+up{job="webapi"}
+
+# Кількість HTTP запитів
+http_requests_total
+
+# Середнє час обробки запиту
+histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))
+
+# Використання CPU контейнером
+rate(container_cpu_usage_seconds_total[5m]) * 100
+
+# Використання пам'яті в МБ
+container_memory_usage_bytes / 1024 / 1024
+```
+
+### Перегляд дашборду в Grafana
+
+**1. Перейти на http://localhost:3000**
+
+**2. Увійти:**
+- Username: `admin`
+- Password: `admin123`
+
+**3. Обирати дашборд "Monitoring Dashboard"**
+
+**4. Дашборд показує:**
+- 📊 Статус сервісів (зелений/червоний)
+- 📈 Процент використання CPU кожним контейнером
+- 💾 Використання пам'яті (в МБ)
+- 📡 Кількість HTTP запитів за секунду
+- ⏱️ Час обробки запитів (percentiles)
+
+### Налаштування нових alert правил
+
+Відредагуйте `monitoring/prometheus/alert.rules.yml`:
+
+```yaml
+groups:
+  - name: my_alerts
+    rules:
+      - alert: MyAlert
+        expr: up{job="webapi"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "WebAPI is down"
+```
+
+Перезавантажити конфіг:
+```bash
+curl -X POST http://localhost:9090/-/reload
+```
+
+### Рішення проблем
+
+**Контейнери не запускаються:**
+```bash
+# Перевірити логи
+docker-compose logs -f webapi
+
+# Перестартувати контейнер
+docker-compose restart webapi
+```
+
+**Метрики не збираються:**
+```bash
+# Перевірити статус Prometheus
+curl http://localhost:9090/-/healthy
+
+# Перевірити targets
+curl http://localhost:9090/api/v1/targets
+```
+
+**Grafana не показує дані:**
+- Перевірити Data Source: Configuration > Data Sources > Prometheus
+- Спробувати запит: `up` у тестовій вкладці
+
+**Alertmanager не надсилає повідомлення:**
+```bash
+# Перевірити конфіг
+docker-compose logs alertmanager
+
+# Перезавантажити контейнер
+docker-compose restart alertmanager
+```
+
+### Корисні команди
+
+```bash
+# Запустити все
+docker-compose up -d
+
+# Зупинити все
+docker-compose down
+
+# Переглянути логи всіх контейнерів
+docker-compose logs -f
+
+# Логи конкретного контейнера
+docker-compose logs -f webapi
+
+# Видалити всі дані (volume)
+docker-compose down -v
+
+# Перестартувати контейнер
+docker-compose restart webapi
+
+# Виконати команду у контейнері
+docker-compose exec webapi npm start
+
+# Перевірити метрики WebAPI
+curl http://localhost:5000/metrics
+
+# Перевірити здоров'я сервісів
+curl http://localhost:5000/health
+curl http://localhost:3000/api/health
+curl http://localhost:9090/-/healthy
+```
+
+### Важливо для production
+
+Перед розгортанням в production необхідно:
+
+1. **Змінити паролі:**
+   - Grafana admin пароль
+   - MQTT користувачі та паролі
+
+2. **Налаштувати persistence:**
+   - Дати томам більший розмір
+   - Налаштувати backup
+
+3. **Добавити SSL/TLS:**
+   - Сертифікати для HTTPS
+
+4. **Налаштувати resource limits:**
+   - Memory limits для контейнерів
+   - CPU limits
+
+5. **Увімкнути аутентифікацію:**
+   - Prometheus auth
+   - MQTT auth
+
+6. **Централізоване логування:**
+   - Додати Loki для логів
+   - Додати логування у Grafana
+
 
 ## Самостійна робота
 

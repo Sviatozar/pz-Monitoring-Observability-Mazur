@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>System Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f5f5f5;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 700px;
+            margin: 0 auto;
+            background: #fff;
+            padding: 20px 30px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+
+        h1 {
+            font-size: 1.5em;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .status-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-bottom: 30px;
+        }
+
+        .status-card {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: #fafafa;
+        }
+
+        .status-card.up {
+            border-left: 4px solid #28a745;
+        }
+
+        .status-card.down {
+            border-left: 4px solid #dc3545;
+            background: #fff5f5;
+        }
+
+        .service-name {
+            font-weight: bold;
+        }
+
+        .status-badge.up { color: #28a745; }
+        .status-badge.down { color: #dc3545; font-weight: bold; }
+
+        .links-section {
+            margin-top: 20px;
+        }
+
+        .links-title {
+            font-size: 1.1em;
+            font-weight: bold;
+            margin-bottom: 15px;
+        }
+
+        .links-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .link-button {
+            padding: 8px 15px;
+            background: #f8f9fa;
+            color: #333;
+            text-decoration: none;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+
+        .link-button:hover {
+            background: #e2e6ea;
+        }
+
+        .loading {
+            color: #666;
+            font-style: italic;
+            padding: 10px 0;
+        }
+
+        .footer {
+            margin-top: 30px;
+            text-align: right;
+            color: #888;
+            font-size: 0.85em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>System Monitoring Dashboard</h1>
+
+        <div class="status-list" id="status-grid">
+            <div class="loading">Завантаження статусу сервісів...</div>
+        </div>
+
+        <div class="links-section">
+            <div class="links-title">Швидкі посилання:</div>
+            <div class="links-grid">
+                <a href="http://localhost:9090" class="link-button" target="_blank">Prometheus</a>
+                <a href="http://localhost:3000" class="link-button" target="_blank">Grafana</a>
+                <a href="http://localhost:9093" class="link-button" target="_blank">Alertmanager</a>
+                <a href="http://localhost:18083" class="link-button" target="_blank">EMQX</a>
+                <a href="http://localhost:5000/health" class="link-button" target="_blank">WebAPI Health</a>
+                <a href="http://localhost:8080" class="link-button" target="_blank">cAdvisor</a>
+            </div>
+        </div>
+
+        <div class="footer">
+            <span id="update-time"></span>
+        </div>
+    </div>
+
+    <script>
+        const services = [
+            { name: 'WebAPI', url: 'http://localhost:5000/health' },
+            { name: 'Prometheus', url: 'http://localhost:9090/-/healthy' },
+            { name: 'Grafana', url: 'http://localhost:3000/api/health' },
+            { name: 'EMQX', url: 'http://localhost:18083' },
+            { name: 'cAdvisor', url: 'http://localhost:8080' }
+        ];
+
+        async function checkService(service) {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+            try {
+                await fetch(service.url, { 
+                    method: 'GET',
+                    mode: 'no-cors',
+                    signal: controller.signal
+                });
+                clearTimeout(timeoutId);
+                return { ...service, status: 'up' };
+            } catch (error) {
+                clearTimeout(timeoutId);
+                return { ...service, status: 'down' };
+            }
+        }
+
+        async function updateStatus() {
+            const statuses = await Promise.all(services.map(checkService));
+            const grid = document.getElementById('status-grid');
+            
+            grid.innerHTML = statuses.map(service => `
+                <div class="status-card ${service.status}">
+                    <div class="service-name">${service.name}</div>
+                    <div class="status-badge ${service.status}">
+                        ${service.status === 'up' ? 'Online' : 'Offline'}
+                    </div>
+                </div>
+            `).join('');
+
+            document.getElementById('update-time').innerText = 
+                `Останнє оновлення: ${new Date().toLocaleTimeString('uk-UA')}`;
+        }
+
+        updateStatus();
+
+        setInterval(updateStatus, 10000);
+    </script>
+</body>
+</html>

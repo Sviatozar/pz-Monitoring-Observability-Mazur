@@ -1,0 +1,23 @@
+# ACL (Access Control List) for MQTT Broker
+# This file defines which clients can access which topics
+
+# Default pattern
+user *
+topic read #
+topic write #
+
+# WebAPI user (if authentication is enabled)
+user webapi
+topic write service/+/status
+topic write alerts/#
+topic subscribe alerts/#
+
+# Monitoring user
+user monitoring
+topic read #
+topic write alerts/monitoring
+
+# WebUI user
+user webui
+topic read service/+/status
+topic read alerts/#
